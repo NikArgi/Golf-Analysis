@@ -1,0 +1,417 @@
+#Nikolas Argiropoulos, 40044358
+#STAT 497 - Sports Analytics Final Project Code
+
+#Installing and loading required packages
+install.packages(c("mice","readr","rvest","purrr","dplyr", "Hmisc","ggplot2",
+                   "reshape2","lsr","caTools","heplots","jtools","ggstance",
+                   "broom.mixed","fmsb","scales","tidyverse")) #Installing required packages
+
+packages = c("mice","readr","rvest","purrr","dplyr", "Hmisc","ggplot2",
+             "reshape2","lsr","caTools","heplots","jtools","ggstance",
+             "broom.mixed","fmsb","scales","tidyverse")
+lapply(packages, require, character.only = TRUE)#Loading all required packages
+
+#Data retrieval
+data = read.csv(file="pgadata.csv") #Importing data from CSV
+ls(data) #To see the variables in the dataset
+#Keeping only the variables of interest
+data_analysis = subset(data, select = c(Player,
+                                        Year,
+                                        Driving.Distance,
+                                        Driving.Accuracy.Percentage,
+                                        Approaches.from.less.than.100.yards,
+                                        Approaches.from.greater.than.100.yards,
+                                        GIR,
+                                        Top.10.Finishes,
+                                        Bogey.Average,
+                                        Scoring.Average))
+str(data_analysis) #To verify the variable type
+
+#Renaming variable names so they don't have periods
+
+col_name = c("Driving.Distance", "Driving.Accuracy.Percentage", 
+             "Approaches.from.less.than.100.yards",
+             "Approaches.from.greater.than.100.yards",
+             "Top.10.Finishes","Bogey.Average", "Scoring.Average")
+
+new_col_name = c("Driving Distance", "Driving Accuracy %","Approaches < 100yds",
+                 "Approaches > 100yds","Top 10 Finishes","Bogey Average", 
+                 "Scoring Average")
+
+#Renaming column names to shorten lines of code
+
+colnames(data_analysis)[colnames(data_analysis) %in% col_name] = new_col_name
+
+#I was missing the APLH variable from CSV dataset, thus I webscraped it from the PGA tour website
+
+link = "https://www.pgatour.com/stats/stat.02329.y%d.html"
+
+APLH_data = map_df(2015:2019, function(i){
+  
+  page = read_html(sprintf(link,i))
+  data.frame(Player = html_text(html_nodes(page, "#statsTable a")),
+             APLH = html_text(html_nodes(page, "td:nth-child(5)"))
+  )
+})
+
+#Each year has a different amount of data point, this is to account for it
+APLH_data['Year'] = rep(2015:2019, c(184,185,190,193,188))
+
+#Data Cleaning
+#Created a function to delete n missing values
+delete.na = function(data_analysis, n=0) {
+  data_analysis[rowSums(is.na(data_analysis)) <= n,]
+}
+
+#Deleting players who are missing at least 6 data points out of the 7 continuous variables.
+#To many missing data point to impute.
+
+data_analysis = delete.na(data_analysis, 6)
+
+#Replacing NA values in Top 10 finishes with 0.
+
+data_analysis[c("Top 10 Finishes")][is.na(data_analysis[c("Top 10 Finishes")])] = 0
+
+#Checking is there are any NA in the dataset of intrest
+
+var_DA = c("Driving Distance", "Driving Accuracy %","Approaches < 100yds",
+           "Approaches > 100yds","Top 10 Finishes","Bogey Average", 
+           "Scoring Average", "GIR") #Continuous variables used in analysis
+
+#Loop checking the amount of NA in the dataset
+
+for(var_DA in data_analysis){
+  na_check = sum(is.na(var_DA)) 
+  print(na_check)
+}
+
+#Mean imputation for the 2 missing values, so i can have a complete dataset
+
+data_analysis$`Approaches > 100yds`[which(is.na(data_analysis$`Approaches > 100yds`))]=mean(data_analysis$`Approaches > 100yds`, na.rm = TRUE)
+data_analysis$`Approaches < 100yds`[which(is.na(data_analysis$`Approaches < 100yds`))]=mean(data_analysis$`Approaches < 100yds`, na.rm = TRUE)
+
+#Loop checking the amount of NA in the dataset post imputation
+
+for(var_DA in data_analysis){
+  na_check = sum(is.na(var_DA)) 
+  print(na_check)
+}
+
+#Descriptive statistics of Data
+
+summary(data_analysis)
+sd(data_analysis$`Driving Distance`)
+sd(data_analysis$`Driving Accuracy %`)
+sd(data_analysis$`Approaches < 100yds`)
+sd(data_analysis$`Approaches > 100yds`)
+sd(data_analysis$GIR)
+sd(data_analysis$`Bogey Average`)
+sd(data_analysis$`Scoring Average`)
+
+#Normality Tests
+
+#Scatter plots for linear assumption of regression
+
+pairs(~`Driving Distance`+`Driving Accuracy %`+`Approaches < 100yds`+
+        `Approaches < 100yds`+`Approaches > 100yds`+GIR+`Bogey Average`+
+        `Scoring Average`, data = data_analysis)
+
+#Creating histogram for dataset, density not frequency
+
+categories = names(data_analysis)
+classes = sapply(data_analysis,class)
+
+for(val in categories[classes == 'numeric'])
+{
+  hist(data_analysis[,val], main= paste("Historgram of", val),col='steelblue', 
+       xlab = paste(val), prob = TRUE) # subset with [] not $
+  lines(density(data_analysis[, val]), col = "red", lwd = 3)
+}
+
+#Creating Q-Q plot for dataset
+
+for(val in categories[classes == 'numeric'])
+{
+  qqnorm(data_analysis[,val], main= paste("QQPlot of", val),col='steelblue', xlab = paste(val))
+  qqline(data_analysis[,val], col = "red", lwd = 2)
+}
+
+#Performing shapiro-wilk test
+
+for (val in  categories[classes == 'numeric']){
+ NT = shapiro.test(data_analysis[,val])
+ print(NT)
+ }
+
+#Only continuous data of interest
+
+cont_data = subset(data_analysis, select = c(`Driving Distance`,
+                                             `Driving Accuracy %`,
+                                             `Approaches < 100yds`,
+                                             `Approaches > 100yds`,
+                                              GIR,`Top 10 Finishes`,
+                                             `Bogey Average`,`Scoring Average`))
+
+#Correlation matrix to set up ggplot
+
+cor_matrix = round(cor(cont_data),2)
+
+#Correlations in numerical format
+
+corrdata = melt(cor_matrix)
+
+#Correlation matrix
+
+ggplot(corrdata, aes(x = Var1, y = Var2, fill = value)) +
+  geom_tile() +
+  scale_fill_gradient2(midpoint = 0.5, low = "cyan",mid = "deepskyblue4", 
+                        limits = c(-1, +1)) +
+  labs(title = "Correlation Matrix \n of Golf KPI \n", 
+       x = "", y = "", fill = "Correlation \n Coefficient") +
+  theme(plot.title = element_text(hjust = 0.5, colour = "blue", size = 12,face = "bold"),
+        legend.title = element_text(face="bold", colour="blue", size = 12),
+        axis.text.x = element_text(angle = 45, hjust=1, size = 12),
+        axis.text.y = element_text(size = 12)) +
+        geom_text(aes(x = Var1, y = Var2, label = round(value, 2)), 
+                  color = "black", fontface = "bold", size = 5)
+
+#Multiple regression analysis
+
+#Splitting the GIR DV, no need to split the other 2 since the entire dataset gets splits
+
+split = sample.split(data_analysis$GIR, SplitRatio = 0.7)
+
+#Setting up traing and test dataset
+
+training_set = subset(data_analysis, split == TRUE)
+test_set = subset(data_analysis, split == FALSE)
+
+#Please see reference list under Ford. C for full reference (beginning)
+multiregmodel_training = lm(cbind(GIR, `Bogey Average`, `Scoring Average`) ~ 
+                              `Driving Distance` + 
+                              `Driving Accuracy %` + 
+                              `Approaches < 100yds` + 
+                              `Approaches > 100yds`, 
+                              data = training_set)
+#End of Ford. C reference
+
+summary(multiregmodel_training)#To determine the estimates
+summary.aov(multiregmodel_training) #To determine the SSR,SSE and SSTO
+etasq(multiregmodel_training)#Variation accounted for by each IV for the entire model
+pred_values_MMLR = predict(multiregmodel_training, newdata = test_set)#Predicting the DV using the test data set
+test_set$pred_values_MMLR = pred_values_MMLR#Including the predicted DV into the test data set
+
+#Renaming the Predicted DV values
+test_set$Predicted_GIR = pred_values_MMLR[,"GIR"]
+test_set$Predicted_BA = pred_values_MMLR[,"Bogey Average"]
+test_set$Predicted_SA = pred_values_MMLR[,"Scoring Average"]
+
+col_name_test_set = c("Predicted_GIR", "Predicted_BA", "Predicted_SA")
+
+new_col_name_test_set = c("Predicted GIR", "Predicted Bogey Average", "Predicted Scoring Average")
+
+colnames(test_set)[colnames(test_set) %in% col_name_test_set] = new_col_name_test_set
+
+#Plotting the observed points against predicted points, the regression line
+plot(test_set$GIR, test_set$`Predicted GIR`)
+abline(lm(`Predicted GIR`~GIR, data = test_set))
+
+plot(test_set$`Bogey Average`, test_set$`Predicted Bogey Average`)
+abline(lm(`Predicted Bogey Average`~`Bogey Average`, data = test_set))
+
+plot(test_set$`Scoring Average`, test_set$`Predicted Scoring Average`)
+abline(lm(`Predicted Scoring Average`~`Scoring Average`, data = test_set))
+
+#Mean absolute percentage error formula
+MAPE_formula_GIR = 
+  abs(mean(((test_set$GIR - test_set$`Predicted GIR`)/(test_set$GIR))))*100
+
+MAPE_formula_BA = 
+  abs(mean(((test_set$`Bogey Average` - test_set$`Predicted Bogey Average`)/
+              (test_set$`Bogey Average`))))*100
+
+MAPE_formula_SA = 
+  abs(mean(((test_set$`Scoring Average` - test_set$`Predicted Scoring Average`)/
+              (test_set$`Scoring Average`))))*100
+
+#Different visualizations for regression output and estimates
+
+m1 = lm(GIR ~`Driving Distance` + `Driving Accuracy %` + `Approaches < 100yds` + 
+          `Approaches > 100yds`, data = training_set)
+
+m2 = lm(`Bogey Average` ~ `Driving Distance` + `Driving Accuracy %` + 
+          `Approaches < 100yds` + 
+          `Approaches > 100yds`, data = training_set)
+
+m3 = lm(`Scoring Average` ~`Driving Distance` + `Driving Accuracy %` + 
+          `Approaches < 100yds` + 
+          `Approaches > 100yds`, data = training_set)
+
+summ(m1, confint = TRUE, digits = 3)
+summ(m2, confint = TRUE, digits = 3)
+summ(m3, confint = TRUE, digits = 3)
+
+#Setting up a dataframe to hold the values of model accuracy, MAPE and adjR^2
+
+Model = c("Model 1: GIR", "Model 2: Bogey Average", "Model 3: Scoring Average")
+
+MAPE.Percentage = c(MAPE_formula_GIR,MAPE_formula_BA,MAPE_formula_SA)
+
+adjR.sqrd = c(summary(m1)$adj.r.squared,summary(m2)$adj.r.squared,
+         summary(m3)$adj.r.squared)
+
+table = data.frame(Model,MAPE.Percentage,adjR.sqrd)
+print(table)
+
+#Variation accounted for by each IV for the each respective DV
+
+etaSquared(m1)
+etaSquared(m2)
+etaSquared(m3)
+
+#Normality and leverage plots for each regression
+
+plot(m1)
+plot(m2)
+plot(m3)
+
+#Plots for Visualization
+
+#Plotting Regression estimators
+#Please see reference list under Long. J for full reference (beginning)
+
+plot_summs(m1,m2,m3,inner_ci_level = 0.95, 
+           model.names = c("GIR", "Bogey Average", "Scoring Average"), 
+           legend.title = "Models", point.size = 5)
+#End of Long. J reference
+
+#Radar chart for min, max and means
+#Please see reference list under Alboukadel for full reference (beginning)
+
+#Radar function
+
+radarchart_combine = function(data, color = "#00AFBB", 
+                              vlabels = colnames(data), vlcex = 0.7,
+                              caxislabels = NULL, title = NULL, ...){
+  radarchart(
+    data, axistype = 1,
+    # Customize the polygon
+    pcol = color, pfcol = scales::alpha(color, 0.5), plwd = 2, plty = 1,
+    # Customize the grid
+    cglcol = "grey", cglty = 1, cglwd = 0.8,
+    # Customize the axis
+    axislabcol = "grey", 
+    # Variable labels
+    vlcex = vlcex, vlabels = vlabels,
+    caxislabels = caxislabels, title = title, ...
+  )
+}
+
+#Setting up data for the radar graph under radar chart function
+
+radar_chart_data = data.frame(
+  row.names = c("Tour Average", "Rory McIlroy","Dustin Johnson", "Jordan Spieth"),
+  GIR = c(76.85,79.81, 80.19, 79.41),
+  Bogey.Average = c(2.61,2.29, 2.26, 2.22),
+  Scoring.Average = c(70.95 ,69.38, 69.38, 69.53),
+  Driving.Distance = c(293.10,314.30, 314.46, 292.56),
+  Driving.Accuracy.Percentage = c(61.37,58.43, 56.94, 59.14),
+  Approaches.from.less.than.100.yards = c(17.14,15.90, 15.48, 16.72),
+  Approaches.from.greater.than.100.yards = c(32.65,30.78, 30.52, 31.86),
+  Top.10.Finishes = c(2.73,8.75, 10.60, 8.80))
+
+max_min = data.frame(
+  row.names = c("Max","Min"),
+  GIR = c(84.86, 65.15),
+  Bogey.Average = c(3.940, 1.860),
+  Scoring.Average = c(74.40, 68.70),
+  Driving.Distance = c(319.70, 269.70),
+  Driving.Accuracy.Percentage = c(76.88, 43.02),
+  Approaches.from.less.than.100.yards = c(27.30, 11.60),
+  Approaches.from.greater.than.100.yards = c(40.70, 27.50),
+  Top.10.Finishes = c(15.00, 0.00))
+
+df = rbind(max_min,radar_chart_data)
+#End of Alboukadel reference
+
+#Renaming column names to shorten lines of code
+
+colnames(df)[colnames(df) %in% col_name] = new_col_name
+
+#Individual radar graphs
+
+colors = c("darkorchid1", "dodgerblue1", "firebrick", "deeppink")
+players = c("Tour Average","Rory McIlroy","Dustin Johnson", "Jordan Spieth")
+
+for(i in 1:4){
+  radarchart_combine(
+    data = df[c(1, 2, i+2), ], 
+    color = colors[i], title = players[i]
+  )
+}
+
+#Data preparation for radar chart comparing top three players against the tour average
+
+Players = factor(c("Tour Average", "Rory McIlroy", "Dustin Johnson", "Jordan Spieth"),
+                levels = c("Tour Average", "Rory McIlroy", "Dustin Johnson", "Jordan Spieth"))
+
+var_int = data.frame(GIR = c(76.85,79.81, 80.19, 79.41),
+                    Bogey.Average = c(2.61,2.29, 2.26, 2.22),
+                    Scoring.Average = c(70.95 ,69.38, 69.38, 69.53),
+                    Driving.Distance = c(293.10,314.30, 314.46, 292.56),
+                    Driving.Accuracy.Percentage = c(61.37,58.43, 56.94, 59.14),
+                    Approaches.from.less.than.100.yards = c(17.14,15.90, 15.48, 16.72),
+                    Approaches.from.greater.than.100.yards = c(32.65,30.78, 30.52, 31.86),
+                    Top.10.Finishes = c(2.73,8.75, 10.60, 8.80))
+
+#Re-scaling the data to be between 0 and 1
+
+df_scaled = round(apply(var_int, 2, scales::rescale),2)
+df_scaled = as.data.frame(df_scaled)
+
+#Setting up the new dataframe
+
+df_radar_plot = data.frame(Players = Players,
+                     GIR = df_scaled$GIR,
+                     Bogey.Average = df_scaled$Bogey.Average,
+                     Scoring.Average = df_scaled$Scoring.Average,
+                     Top_10_Finishes = df_scaled$Top.10.Finishes,
+                     Driving_Distance = df_scaled$Driving.Distance,
+                     Drive_Accuracy = df_scaled$Driving.Accuracy.Percentage,
+                     Approaches_less_100yards = df_scaled$Approaches.from.less.than.100.yards,
+                     Approaches_greater_100yards = df_scaled$Approaches.from.greater.than.100.yards)
+
+#Combining and categorising the data
+
+df_radar_plot = melt(df_radar_plot, 
+             id.vars = c("Players"), 
+             measure.vars = c("GIR", "Bogey.Average","Scoring.Average",
+                              "Top_10_Finishes","Driving_Distance",
+                              "Drive_Accuracy","Approaches_less_100yards",
+                              "Approaches_greater_100yards"),
+             variable.name = "KPI",
+             value.name = "Percentage")
+
+levels(df_radar_plot$KPI) = list(
+  GIR = "GIR",
+  `Bogey Average` = "Bogey.Average",
+  `Scoring Average` = "Scoring.Average",
+  `Top 10 Finishes` = "Top_10_Finishes",
+  `Driving Distance` = "Driving_Distance",
+  `Driving Accuracy %` = "Drive_Accuracy",
+  `Approaches < 100yds` = "Approaches_less_100yards",
+  `Approaches > 100yds` = "Approaches_greater_100yards")
+
+#Radar chart for comparing top three players against the tour average
+
+ggplot(data = df_radar_plot,
+       aes(x = KPI, y = Percentage, group = Players, colour = Players)) + 
+  geom_polygon(linewidth = 1, alpha= 0.1, fill = "white") + 
+  ggtitle("Top 3 PGA Tour Players compared to Tour Average")  +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  ylim(-1.0, 1.0) +
+  scale_x_discrete() +
+  theme_light() +
+  scale_color_manual(values = c("Black", "Blue","Red","Green")) +
+  scale_fill_manual(values = c("Black", "Blue","Red","Green")) +
+  coord_polar()

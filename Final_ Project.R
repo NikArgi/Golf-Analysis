@@ -1,4 +1,4 @@
-#Nikolas Argiropoulos, 40044358
+#Nikolas Argiropoulos
 #STAT 497 - Sports Analytics Final Project Code
 
 #Installing and loading required packages
